@@ -19,12 +19,14 @@ functions:
 
 resources:
   Resources:
-    athenaLeaveTable:
+    seekLunchTrain:
       Type: AWS::DynamoDB::Table
       Properties:
         TableName: seek-lunch-train
         AttributeDefinitions:
           - AttributeName: creatorId
+            AttributeType: S
+          - AttributeName: trainId
             AttributeType: S
         KeySchema:
           - AttributeName: creatorId
