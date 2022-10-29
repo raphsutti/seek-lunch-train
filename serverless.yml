@@ -1,0 +1,43 @@
+service: seek-lunch-train
+frameworkVersion: "3.23.0"
+useDotenv: true
+
+provider:
+  name: aws
+  runtime: nodejs12.x
+  environment:
+    SLACK_SIGNING_SECRET: ${env:SLACK_SIGNING_SECRET}
+    SLACK_BOT_TOKEN: ${env:SLACK_BOT_TOKEN}
+
+functions:
+  slack:
+    handler: src/app.handler
+    events:
+      - http:
+          path: /
+          method: post
+
+resources:
+  Resources:
+    athenaLeaveTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: seek-lunch-train
+        AttributeDefinitions:
+          - AttributeName: creatorId
+            AttributeType: S
+        KeySchema:
+          - AttributeName: creatorId
+            KeyType: HASH
+          - AttributeName: trainId
+            KeyType: RANGE
+        ProvisionedThroughput:
+          ReadCapacityUnits: 5
+          WriteCapacityUnits: 5
+        TimeToLiveSpecification:
+          Enabled: true
+          AttributeName: ttl
+
+plugins:
+  - serverless-esbuild
+  - serverless-offline
