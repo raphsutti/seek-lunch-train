@@ -1,8 +1,9 @@
-import { App, AwsLambdaReceiver, BlockAction } from "@slack/bolt";
+import { App, AwsLambdaReceiver } from "@slack/bolt";
 import { AwsEvent } from "@slack/bolt/dist/receivers/AwsLambdaReceiver";
-import {format, formatInTimeZone} from "date-fns-tz";
-import {putDynamoItem} from "./dynamo";
-import {formatISO} from "date-fns";
+import { formatInTimeZone } from "date-fns-tz";
+import { putDynamoItem } from "./dynamo";
+import { format, formatISO } from "date-fns";
+import { v4 as uuidV4 } from "uuid";
 
 if (!process.env.SLACK_SIGNING_SECRET) {
   throw Error("No SLACK_SIGNING_SECRET");
@@ -21,7 +22,6 @@ const app = new App({
 // TODO - Change this to prod channel ID
 const channel = "lunch-train";
 
-// TODO - create train
 // TODO - join train
 // TODO - leave train
 // TODO - delete train
@@ -32,13 +32,12 @@ app.command("/lunch", async ({ ack, body, client, logger }) => {
   await ack();
 
   const today = formatInTimeZone(
-      new Date(),
-      "Australia/Melbourne",
-      "yyyy-MM-dd"
+    new Date(),
+    "Australia/Melbourne",
+    "yyyy-MM-dd"
   );
 
   try {
-    // TODO Add food destination and meeting point
     await client.views.open({
       trigger_id: body.trigger_id,
       view: {
@@ -50,70 +49,69 @@ app.command("/lunch", async ({ ack, body, client, logger }) => {
         },
         blocks: [
           {
-            "type": "input",
-            "block_id":"lunchDestination",
-            "element": {
-              "type": "plain_text_input",
-              "action_id": "lunchDestinationAction"
+            type: "input",
+            block_id: "lunchDestination",
+            element: {
+              type: "plain_text_input",
+              action_id: "lunchDestinationAction",
             },
-            "label": {
-              "type": "plain_text",
-              "text": "Where are we eating?",
-              "emoji": true
-            }
+            label: {
+              type: "plain_text",
+              text: "Where are we eating?",
+              emoji: true,
+            },
           },
           {
-            "type": "input",
-            "block_id":"meetLocation",
-            "element": {
-              "type": "plain_text_input",
-              "action_id": "meetLocationAction"
+            type: "input",
+            block_id: "meetLocation",
+            element: {
+              type: "plain_text_input",
+              action_id: "meetLocationAction",
             },
-            "label": {
-              "type": "plain_text",
-              "text": "Where shall we meet and when?",
-              "emoji": true
-            }
+            label: {
+              type: "plain_text",
+              text: "Where shall we meet and when?",
+              emoji: true,
+            },
           },
           {
-            "type": "input",
-            "block_id":"meetDate",
-            "element": {
-              "type": "datepicker",
-              "initial_date": today,
-              "placeholder": {
-                "type": "plain_text",
-                "text": "Select a date",
-                "emoji": true
+            type: "input",
+            block_id: "meetDate",
+            element: {
+              type: "datepicker",
+              initial_date: today,
+              placeholder: {
+                type: "plain_text",
+                text: "Select a date",
+                emoji: true,
               },
-              "action_id": "meetDateAction"
+              action_id: "meetDateAction",
             },
-            "label": {
-              "type": "plain_text",
-              "text": "Date",
-              "emoji": true
-            }
+            label: {
+              type: "plain_text",
+              text: "Date",
+              emoji: true,
+            },
           },
           {
-            "type": "input",
-            "block_id":"meetTime",
-            "element": {
-              "type": "timepicker",
-              "initial_time": "12:00",
-              "placeholder": {
-                "type": "plain_text",
-                "text": "Select time",
-                "emoji": true
+            type: "input",
+            block_id: "meetTime",
+            element: {
+              type: "timepicker",
+              initial_time: "12:00",
+              placeholder: {
+                type: "plain_text",
+                text: "Select time",
+                emoji: true,
               },
-              "action_id": "meetTimeAction"
+              action_id: "meetTimeAction",
             },
-            "label": {
-              "type": "plain_text",
-              "text": "Time",
-              "emoji": true
-            }
-          }
-
+            label: {
+              type: "plain_text",
+              text: "Time",
+              emoji: true,
+            },
+          },
         ],
         submit: {
           type: "plain_text",
@@ -125,42 +123,99 @@ app.command("/lunch", async ({ ack, body, client, logger }) => {
     logger.error(error, "Failed to open input create train modal");
   }
   return;
-})
+});
 
-app.action("meetDateAction", async ({ ack, body, client }) => {
+app.action("meetDateAction", async ({ ack }) => {
   return await ack();
 });
 
-app.action("meetTimeAction", async ({ ack, body, client }) => {
+app.action("meetTimeAction", async ({ ack }) => {
   return await ack();
 });
 
-app.view("newTrain", async ({ ack, body, client, view, logger }) => {
+app.view("newTrain", async ({ ack, body, client, logger }) => {
   await ack();
 
-//   TODO combine time and date into UTC string
-const time = body.view.state.values.meetTime.meetTimeAction.selected_time
-const date = body.view.state.values.meetDate.meetDateAction.selected_date
-  // console.log(JSON.stringify(body,null,2))
+  const creatorId = body.user.id;
+  const trainId = uuidV4();
+  const lunchDestination =
+    body.view.state.values.lunchDestination.lunchDestinationAction.value ?? "";
+  const meetLocation =
+    body.view.state.values.meetLocation.meetLocationAction.value ?? "";
+  const time =
+    body.view.state.values.meetTime.meetTimeAction.selected_time ?? "";
+  const date =
+    body.view.state.values.meetDate.meetDateAction.selected_date ?? "";
+  const leavingAt = new Date(date + "T" + time + ":00");
+
+  // console.log(JSON.stringify(body, null, 2));
+
   try {
-
     await putDynamoItem({
-      creatorId: body.user.id,
-      lunchDestination: body.view.state.values.lunchDestination.lunchDestinationAction.value ?? '',
-      meetLocation: body.view.state.values.meetLocation.meetLocationAction.value ?? '',
-      leavingAt: formatISO(new Date()),
-      participants: []
-    })
-
-    // TODO Insert into DB
-    await client.chat.postMessage({
-      channel,
-      text:"done!",
+      creatorId,
+      trainId,
+      lunchDestination,
+      meetLocation,
+      leavingAt: formatISO(leavingAt),
+      participants: [],
     });
   } catch (error) {
     logger.error(error, "Failed to put new lunch train to Dynamo");
   }
+
+  await client.chat.postMessage({
+    channel,
+    blocks: [
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: `<@${
+            body.user.id
+          }> has started a lunch train!\nDestination: ${lunchDestination}\nMeeting at: ${meetLocation}\nLeaving: ${format(
+            leavingAt,
+            "MM/dd/yy hh:mm"
+          )}`,
+        },
+      },
+      {
+        type: "actions",
+        elements: [
+          {
+            type: "button",
+            text: {
+              type: "plain_text",
+              text: "Count me in!",
+              emoji: true,
+            },
+            value: `${creatorId}-${trainId}`,
+            action_id: "joinTrain",
+          },
+          {
+            type: "button",
+            text: {
+              type: "plain_text",
+              text: "I'll pass",
+              emoji: true,
+            },
+            value: `${creatorId}-${trainId}`,
+            action_id: "leaveTrain",
+          },
+        ],
+      },
+    ],
+  });
   return;
+});
+
+// TODO add user to participants list
+app.action("joinTrain", async ({ ack }) => {
+  return await ack();
+});
+
+// TODO remove use from participants list
+app.action("leaveTrain", async ({ ack }) => {
+  return await ack();
 });
 
 export const handler = async (event: AwsEvent, context: any, callback: any) => {
