@@ -5,6 +5,7 @@ const DYNAMO_TABLE = "seek-lunch-train";
 
 interface Participant {
   userId: string;
+  // For future roll call feature
   readyToDepart: boolean;
 }
 export interface LunchTrain {

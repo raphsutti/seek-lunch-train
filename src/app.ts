@@ -26,9 +26,8 @@ const app = new App({
 // TODO - Change this to prod channel ID
 const channel = "lunch-train";
 
-// TODO - leave train
-// TODO - delete train
 // TODO - set reminder when train leaving
+// TODO - delete train
 
 // Create new lunch train
 app.command("/lunch", async ({ ack, body, client, logger }) => {
@@ -217,8 +216,7 @@ app.action("joinTrain", async ({ ack, body, client, logger }) => {
 
   const buttonValue = (body as BlockAction).actions[0] as ButtonAction;
   const [creatorId, trainId] = buttonValue.value.split(".");
-  console.log("creatorId: ", creatorId);
-  console.log("trainId: ", trainId);
+
   const queryResult = await queryDynamo({ creatorId, trainId });
   if (!queryResult) {
     return logger.error(
@@ -256,9 +254,84 @@ app.action("joinTrain", async ({ ack, body, client, logger }) => {
   return;
 });
 
-// TODO remove use from participants list
-app.action("leaveTrain", async ({ ack }) => {
-  return await ack();
+// Leave lunch train
+app.action("leaveTrain", async ({ ack, body, client, logger }) => {
+  await ack();
+
+  // Query Dynamo for the train
+  const buttonValue = (body as BlockAction).actions[0] as ButtonAction;
+  const [creatorId, trainId] = buttonValue.value.split(".");
+  const queryResult = await queryDynamo({ creatorId, trainId });
+  if (!queryResult) {
+    return logger.error(
+      `Could not find trainId: ${trainId} created by user: ${creatorId}`
+    );
+  }
+
+  // Check if user in participants list
+  const hasUserJoined = queryResult.participants.some(
+    (participant) => participant.userId === body.user.id
+  );
+  // Could early return here but if lambda times out, joined message in thread wont be deleted
+  if (!hasUserJoined) {
+    logger.info(`User ${body.user.id} has already left the train`);
+  }
+
+  // Remove user from list
+  const updatedTrain: LunchTrainRecord = {
+    ...queryResult,
+    participants: queryResult.participants.filter(
+      (participant) => participant.userId !== body.user.id
+    ),
+  };
+
+  try {
+    await putDynamoItem(updatedTrain);
+  } catch (error) {
+    logger.error(error, "Failed to update lunch train participant to Dynamo");
+  }
+
+  // Delete user joined message in thread
+  const thread = await client.conversations.replies({
+    channel: body.channel?.id ?? "",
+    ts: (body as BlockAction).message?.thread_ts,
+  });
+
+  const replies = thread.messages
+    ?.map((message) => {
+      return {
+        // @ts-ignore
+        user: message.blocks[0].elements?.[0].elements?.[0]?.user_id,
+        ts: message.ts,
+      };
+    })
+    // Filter out parent message
+    .filter((message) => message.user);
+
+  if (!replies) {
+    return logger.info("No replies found in thread");
+  }
+
+  // Find user joined message
+  const messageTsToBeDeleted = replies.find(
+    (reply) => reply.user === body.user.id
+  );
+
+  if (!messageTsToBeDeleted || !messageTsToBeDeleted.ts) {
+    return logger.info("No message found to be deleted");
+  }
+
+  // Delete
+  try {
+    await client.chat.delete({
+      channel: body.channel?.id ?? "",
+      ts: messageTsToBeDeleted.ts,
+    });
+  } catch (error) {
+    logger.error(error, "Failed to delete joined message");
+  }
+
+  return;
 });
 
 export const handler = async (event: AwsEvent, context: any, callback: any) => {
