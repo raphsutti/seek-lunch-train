@@ -43,6 +43,28 @@ export const putDynamoItem = (data: LunchTrain) => {
   });
 };
 
+export const queryDynamo = async (input: {
+  creatorId: string;
+  trainId: string;
+}) => {
+  const params = {
+    TableName: DYNAMO_TABLE,
+    KeyConditionExpression: "#creatorId = :hkey and #trainId = :rkey",
+    ExpressionAttributeValues: {
+      ":hkey": input.creatorId,
+      ":rkey": input.trainId,
+    },
+    ExpressionAttributeNames: {
+      "#creatorId": "creatorId",
+      "#trainId": "trainId",
+    },
+  };
+
+  const { Items } = await client.query(params).promise();
+
+  return Items ? (Items[0] as LunchTrainRecord) : undefined;
+};
+
 // TODO use query Dynamo instead
 export const scanDynamo = () =>
   client.scan({ TableName: DYNAMO_TABLE }).promise();

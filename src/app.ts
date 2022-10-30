@@ -1,9 +1,13 @@
 import { App, AwsLambdaReceiver } from "@slack/bolt";
 import { AwsEvent } from "@slack/bolt/dist/receivers/AwsLambdaReceiver";
 import { formatInTimeZone } from "date-fns-tz";
-import { putDynamoItem } from "./dynamo";
+import { LunchTrainRecord, putDynamoItem, queryDynamo } from "./dynamo";
 import { format, formatISO } from "date-fns";
 import { v4 as uuidV4 } from "uuid";
+import {
+  BlockAction,
+  ButtonAction,
+} from "@slack/bolt/dist/types/actions/block-action";
 
 if (!process.env.SLACK_SIGNING_SECRET) {
   throw Error("No SLACK_SIGNING_SECRET");
@@ -22,7 +26,6 @@ const app = new App({
 // TODO - Change this to prod channel ID
 const channel = "lunch-train";
 
-// TODO - join train
 // TODO - leave train
 // TODO - delete train
 // TODO - set reminder when train leaving
@@ -133,6 +136,7 @@ app.action("meetTimeAction", async ({ ack }) => {
   return await ack();
 });
 
+// Create new train
 app.view("newTrain", async ({ ack, body, client, logger }) => {
   await ack();
 
@@ -147,8 +151,6 @@ app.view("newTrain", async ({ ack, body, client, logger }) => {
   const date =
     body.view.state.values.meetDate.meetDateAction.selected_date ?? "";
   const leavingAt = new Date(date + "T" + time + ":00");
-
-  // console.log(JSON.stringify(body, null, 2));
 
   try {
     await putDynamoItem({
@@ -188,7 +190,8 @@ app.view("newTrain", async ({ ack, body, client, logger }) => {
               text: "Count me in!",
               emoji: true,
             },
-            value: `${creatorId}-${trainId}`,
+            style: "primary",
+            value: `${creatorId}.${trainId}`,
             action_id: "joinTrain",
           },
           {
@@ -198,7 +201,7 @@ app.view("newTrain", async ({ ack, body, client, logger }) => {
               text: "I'll pass",
               emoji: true,
             },
-            value: `${creatorId}-${trainId}`,
+            value: `${creatorId}.${trainId}`,
             action_id: "leaveTrain",
           },
         ],
@@ -208,9 +211,49 @@ app.view("newTrain", async ({ ack, body, client, logger }) => {
   return;
 });
 
-// TODO add user to participants list
-app.action("joinTrain", async ({ ack }) => {
-  return await ack();
+// Join lunch train
+app.action("joinTrain", async ({ ack, body, client, logger }) => {
+  await ack();
+
+  const buttonValue = (body as BlockAction).actions[0] as ButtonAction;
+  const [creatorId, trainId] = buttonValue.value.split(".");
+  console.log("creatorId: ", creatorId);
+  console.log("trainId: ", trainId);
+  const queryResult = await queryDynamo({ creatorId, trainId });
+  if (!queryResult) {
+    return logger.error(
+      `Could not find trainId: ${trainId} created by user: ${creatorId}`
+    );
+  }
+
+  const hasUserJoined = queryResult.participants.some(
+    (participant) => participant.userId === body.user.id
+  );
+  if (hasUserJoined) {
+    return logger.info(`User ${body.user.id} has already joined the train`);
+  }
+
+  const updatedTrain: LunchTrainRecord = {
+    ...queryResult,
+    participants: [
+      ...queryResult.participants,
+      { userId: body.user.id, readyToDepart: false },
+    ],
+  };
+
+  try {
+    await putDynamoItem(updatedTrain);
+  } catch (error) {
+    logger.error(error, "Failed to update lunch train participant to Dynamo");
+  }
+
+  await client.chat.postMessage({
+    channel,
+    thread_ts: (body as BlockAction).message?.ts,
+    text: `<@${body.user.id}> joined the train!`,
+  });
+
+  return;
 });
 
 // TODO remove use from participants list
