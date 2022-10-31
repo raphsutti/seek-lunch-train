@@ -2,7 +2,7 @@ import { App, AwsLambdaReceiver } from "@slack/bolt";
 import { AwsEvent } from "@slack/bolt/dist/receivers/AwsLambdaReceiver";
 import { formatInTimeZone } from "date-fns-tz";
 import { LunchTrainRecord, putDynamoItem, queryDynamo } from "./dynamo";
-import { format, formatISO } from "date-fns";
+import { format, formatISO, getUnixTime, sub } from "date-fns";
 import { v4 as uuidV4 } from "uuid";
 import {
   BlockAction,
@@ -26,9 +26,11 @@ const app = new App({
 // TODO - Change this to prod channel ID
 const channel = "lunch-train";
 
-// TODO - set reminder for train creator as train get created
-// TODO - set reminder for participant as they join
-// TODO - delete train and reminder
+// TODO - delete train
+// TODO - delete reminder for creator
+// TODO - delete reminders for all participants
+
+// TODO - update original created train message
 
 // Create new lunch train
 app.command("/lunch", async ({ ack, body, client, logger }) => {
@@ -101,7 +103,7 @@ app.command("/lunch", async ({ ack, body, client, logger }) => {
             block_id: "meetTime",
             element: {
               type: "timepicker",
-              initial_time: "12:00",
+              initial_time: "12:00", // TODO - time should be in the future
               placeholder: {
                 type: "plain_text",
                 text: "Select time",
@@ -152,20 +154,8 @@ app.view("newTrain", async ({ ack, body, client, logger }) => {
     body.view.state.values.meetDate.meetDateAction.selected_date ?? "";
   const leavingAt = new Date(date + "T" + time + ":00");
 
-  try {
-    await putDynamoItem({
-      creatorId,
-      trainId,
-      lunchDestination,
-      meetLocation,
-      leavingAt: formatISO(leavingAt),
-      participants: [],
-    });
-  } catch (error) {
-    logger.error(error, "Failed to put new lunch train to Dynamo");
-  }
-
-  await client.chat.postMessage({
+  // Announce train created
+  const postMessageResult = await client.chat.postMessage({
     channel,
     blocks: [
       {
@@ -176,10 +166,11 @@ app.view("newTrain", async ({ ack, body, client, logger }) => {
             body.user.id
           }> has started a lunch train!\nDestination: ${lunchDestination}\nMeeting at: ${meetLocation}\nLeaving: ${format(
             leavingAt,
-            "MM/dd/yy hh:mm"
+            "dd/MM/yy hh:mm aa"
           )}`,
         },
       },
+      // TODO - remove buttons once train has left (leavingAt < now)
       {
         type: "actions",
         elements: [
@@ -208,6 +199,30 @@ app.view("newTrain", async ({ ack, body, client, logger }) => {
       },
     ],
   });
+
+  // Set reminder for train creator
+  const { scheduled_message_id } = await client.chat.scheduleMessage({
+    channel: creatorId,
+    text: `🚄 Your lunch train to ${lunchDestination} is departing in 10 minutes\n Head to your meeting point at ${meetLocation}`,
+    post_at: getUnixTime(sub(leavingAt, { minutes: 10 })),
+  });
+
+  // Save train to db
+  try {
+    await putDynamoItem({
+      creatorId,
+      trainId,
+      lunchDestination,
+      meetLocation,
+      leavingAt: formatISO(leavingAt),
+      participants: [],
+      trainCreatedPostTimeStamp: postMessageResult.message?.ts ?? "",
+      creatorReminderScheduledMessageId: scheduled_message_id ?? "",
+    });
+  } catch (error) {
+    return logger.error(error, "Failed to put new lunch train to Dynamo");
+  }
+
   return;
 });
 
@@ -228,15 +243,35 @@ app.action("joinTrain", async ({ ack, body, client, logger }) => {
   const hasUserJoined = queryResult.participants.some(
     (participant) => participant.userId === body.user.id
   );
+  // Could early return here but leaving it for retry
   if (hasUserJoined) {
-    return logger.info(`User ${body.user.id} has already joined the train`);
+    logger.info(`User ${body.user.id} has already joined the train`);
+  }
+
+  let scheduledMessageResult;
+  // Set reminder for participant
+  try {
+    scheduledMessageResult = await client.chat.scheduleMessage({
+      channel: body.user.id,
+      text: `👋 The lunch train to ${queryResult.lunchDestination} is departing in 10 minutes\n Head to your meeting point at ${queryResult.meetLocation}`,
+      post_at: getUnixTime(
+        sub(new Date(queryResult.leavingAt), { minutes: 10 })
+      ),
+    });
+  } catch (error) {
+    logger.info(error, "Unable to create a scheduled message for participant");
   }
 
   const updatedTrain: LunchTrainRecord = {
     ...queryResult,
     participants: [
       ...queryResult.participants,
-      { userId: body.user.id, readyToDepart: false },
+      {
+        userId: body.user.id,
+        reminderScheduledMessageId:
+          scheduledMessageResult?.scheduled_message_id ?? "",
+        readyToDepart: false,
+      },
     ],
   };
 
@@ -272,18 +307,36 @@ app.action("leaveTrain", async ({ ack, body, client, logger }) => {
   const hasUserJoined = queryResult.participants.some(
     (participant) => participant.userId === body.user.id
   );
-  // Could early return here but if lambda times out, joined message in thread wont be deleted
+  // Could early return here but leaving it for retry
   if (!hasUserJoined) {
     logger.info(`User ${body.user.id} has already left the train`);
   }
 
+  // Delete participant scheduled messages
+  const leavingParticipants = queryResult.participants.filter(
+    (participant) => participant.userId === body.user.id
+  );
+
+  try {
+    await Promise.all(
+      leavingParticipants.map((participant) =>
+        client.chat.deleteScheduledMessage({
+          channel: participant.userId,
+          scheduled_message_id: participant.reminderScheduledMessageId,
+        })
+      )
+    );
+  } catch (error) {
+    logger.info(error, "Failed to delete scheduled messages");
+  }
+
+  // Update db
   const updatedTrain: LunchTrainRecord = {
     ...queryResult,
     participants: queryResult.participants.filter(
       (participant) => participant.userId !== body.user.id
     ),
   };
-
   try {
     await putDynamoItem(updatedTrain);
   } catch (error) {
@@ -328,8 +381,6 @@ app.action("leaveTrain", async ({ ack, body, client, logger }) => {
   } catch (error) {
     logger.error(error, "Failed to delete joined message");
   }
-
-  // TODO delete reminder for participant
 
   return;
 });

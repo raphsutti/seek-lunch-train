@@ -5,6 +5,7 @@ const DYNAMO_TABLE = "seek-lunch-train";
 
 interface Participant {
   userId: string;
+  reminderScheduledMessageId: string;
   // For future roll call feature
   readyToDepart: boolean;
 }
@@ -17,6 +18,9 @@ export interface LunchTrain {
   // UTC format
   leavingAt: string;
   participants: Participant[];
+  // TimeStamp identifies the message for updating
+  trainCreatedPostTimeStamp: string;
+  creatorReminderScheduledMessageId: string;
 }
 
 export interface LunchTrainRecord extends LunchTrain {
@@ -65,10 +69,6 @@ export const queryDynamo = async (input: {
 
   return Items ? (Items[0] as LunchTrainRecord) : undefined;
 };
-
-// TODO use query Dynamo instead
-export const scanDynamo = () =>
-  client.scan({ TableName: DYNAMO_TABLE }).promise();
 
 export const deleteItemDynamo = (id: string) =>
   client
