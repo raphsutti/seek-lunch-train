@@ -26,8 +26,9 @@ const app = new App({
 // TODO - Change this to prod channel ID
 const channel = "lunch-train";
 
-// TODO - set reminder when train leaving
-// TODO - delete train
+// TODO - set reminder for train creator as train get created
+// TODO - set reminder for participant as they join
+// TODO - delete train and reminder
 
 // Create new lunch train
 app.command("/lunch", async ({ ack, body, client, logger }) => {
@@ -268,7 +269,6 @@ app.action("leaveTrain", async ({ ack, body, client, logger }) => {
     );
   }
 
-  // Check if user in participants list
   const hasUserJoined = queryResult.participants.some(
     (participant) => participant.userId === body.user.id
   );
@@ -277,7 +277,6 @@ app.action("leaveTrain", async ({ ack, body, client, logger }) => {
     logger.info(`User ${body.user.id} has already left the train`);
   }
 
-  // Remove user from list
   const updatedTrain: LunchTrainRecord = {
     ...queryResult,
     participants: queryResult.participants.filter(
@@ -321,7 +320,6 @@ app.action("leaveTrain", async ({ ack, body, client, logger }) => {
     return logger.info("No message found to be deleted");
   }
 
-  // Delete
   try {
     await client.chat.delete({
       channel: body.channel?.id ?? "",
@@ -330,6 +328,8 @@ app.action("leaveTrain", async ({ ack, body, client, logger }) => {
   } catch (error) {
     logger.error(error, "Failed to delete joined message");
   }
+
+  // TODO delete reminder for participant
 
   return;
 });
