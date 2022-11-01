@@ -4,6 +4,7 @@ import { formatInTimeZone } from "date-fns-tz";
 import {
   deleteItemDynamo,
   LunchTrainRecord,
+  putDynamoItem,
   queryAllTrainsByCreator,
   queryDynamo,
 } from "./dynamo";
@@ -31,6 +32,8 @@ const app = new App({
 
 // TODO - Change this to prod channel ID
 const channel = "lunch-train";
+
+// TODO - use Lambda SQS event to process events
 
 // TODO - update original created train message when train deleted or in the past
 
@@ -218,22 +221,20 @@ app.view("newTrain", async ({ ack, body, client, logger }) => {
     post_at: getUnixTime(sub(leavingAt, { minutes: 10 })),
   });
 
-  // Save train to db
+  // Save train to db - sqs processor not required
   try {
-    await sendSqs(
-      JSON.stringify({
-        creatorId,
-        trainId,
-        lunchDestination,
-        meetLocation,
-        leavingAt: formatISO(leavingAt),
-        participants: [],
-        trainCreatedPostTimeStamp: postMessageResult.message?.ts ?? "",
-        creatorReminderScheduledMessageId: scheduled_message_id ?? "",
-      })
-    );
+    await putDynamoItem({
+      creatorId,
+      trainId,
+      lunchDestination,
+      meetLocation,
+      leavingAt: formatISO(leavingAt),
+      participants: [],
+      trainCreatedPostTimeStamp: postMessageResult.message?.ts ?? "",
+      creatorReminderScheduledMessageId: scheduled_message_id ?? "",
+    });
   } catch (error) {
-    logger.error(error, "Failed to put new lunch train via send SQS message");
+    logger.error(error, "Failed to put new lunch train into Dynamo");
   }
 
   return;
@@ -288,13 +289,19 @@ app.action("joinTrain", async ({ ack, body, client, logger }) => {
     ],
   };
 
+  // try {
+  //   await sendSqs(JSON.stringify(updatedTrain));
+  // } catch (error) {
+  //   logger.error(
+  //     error,
+  //     "Failed to update lunch train participant via send SQS message"
+  //   );
+  // }
+
   try {
-    await sendSqs(JSON.stringify(updatedTrain));
+    await putDynamoItem(updatedTrain);
   } catch (error) {
-    logger.error(
-      error,
-      "Failed to update lunch train participant via send SQS message"
-    );
+    logger.error(error, "Failed to update lunch train participant via dynamo");
   }
 
   await client.chat.postMessage({
@@ -354,13 +361,19 @@ app.action("leaveTrain", async ({ ack, body, client, logger }) => {
     ),
   };
 
+  // try {
+  //   await sendSqs(JSON.stringify(updatedTrain));
+  // } catch (error) {
+  //   logger.error(
+  //     error,
+  //     "Failed to update lunch train participant via send SQS message"
+  //   );
+  // }
+
   try {
-    await sendSqs(JSON.stringify(updatedTrain));
+    await putDynamoItem(updatedTrain);
   } catch (error) {
-    logger.error(
-      error,
-      "Failed to update lunch train participant via send SQS message"
-    );
+    logger.error(error, "Failed to update lunch train participant via dynamo");
   }
 
   // Delete user joined message in thread
@@ -406,6 +419,7 @@ app.action("leaveTrain", async ({ ack, body, client, logger }) => {
 });
 
 // List all trains by creator
+// TODO switch to slash command /deletelunch
 app.shortcut("delete_train", async ({ ack, body, client, logger }) => {
   await ack();
 
@@ -449,7 +463,6 @@ app.shortcut("delete_train", async ({ ack, body, client, logger }) => {
   return;
 });
 
-// TODO switch to slash command /deletelunch
 app.action("deleteTrain", async ({ ack, body, client, logger }) => {
   await ack();
 
