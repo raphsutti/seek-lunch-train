@@ -31,7 +31,7 @@ const client = new DocumentClient({ region: "ap-southeast-2" });
 
 export const putDynamoItem = (data: LunchTrain) => {
   const oneWeekAfterTrainLeft = getUnixTime(
-    add(new Date(data.leavingAt), { days: 7 })
+    add(new Date(data.leavingAt), { days: 2 })
   );
   const params = {
     TableName: DYNAMO_TABLE,
@@ -70,12 +70,34 @@ export const queryDynamo = async (input: {
   return Items ? (Items[0] as LunchTrainRecord) : undefined;
 };
 
-export const deleteItemDynamo = (id: string) =>
-  client
-    .delete({
-      TableName: DYNAMO_TABLE,
-      Key: {
-        id,
-      },
-    })
-    .promise();
+export const queryAllTrainsByCreator = async (input: { creatorId: string }) => {
+  const params = {
+    TableName: DYNAMO_TABLE,
+    KeyConditionExpression: "#creatorId = :hkey",
+    ExpressionAttributeValues: {
+      ":hkey": input.creatorId,
+    },
+    ExpressionAttributeNames: {
+      "#creatorId": "creatorId",
+    },
+  };
+
+  const { Items } = await client.query(params).promise();
+
+  return Items ? (Items as LunchTrainRecord[]) : undefined;
+};
+
+export const deleteItemDynamo = (input: {
+  creatorId: string;
+  trainId: string;
+}) => {
+  const params = {
+    TableName: DYNAMO_TABLE,
+    Key: {
+      creatorId: input.creatorId,
+      trainId: input.trainId,
+    },
+  };
+
+  return client.delete(params).promise();
+};

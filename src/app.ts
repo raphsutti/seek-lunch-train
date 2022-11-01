@@ -1,7 +1,13 @@
 import { App, AwsLambdaReceiver } from "@slack/bolt";
 import { AwsEvent } from "@slack/bolt/dist/receivers/AwsLambdaReceiver";
 import { formatInTimeZone } from "date-fns-tz";
-import { LunchTrainRecord, putDynamoItem, queryDynamo } from "./dynamo";
+import {
+  deleteItemDynamo,
+  LunchTrainRecord,
+  putDynamoItem,
+  queryAllTrainsByCreator,
+  queryDynamo,
+} from "./dynamo";
 import { format, formatISO, getUnixTime, sub } from "date-fns";
 import { v4 as uuidV4 } from "uuid";
 import {
@@ -26,11 +32,9 @@ const app = new App({
 // TODO - Change this to prod channel ID
 const channel = "lunch-train";
 
-// TODO - delete train
-// TODO - delete reminder for creator
-// TODO - delete reminders for all participants
+// TODO - add SQS and Lambda processor
 
-// TODO - update original created train message
+// TODO - update original created train message when train deleted or in the past
 
 // Create new lunch train
 app.command("/lunch", async ({ ack, body, client, logger }) => {
@@ -154,6 +158,15 @@ app.view("newTrain", async ({ ack, body, client, logger }) => {
     body.view.state.values.meetDate.meetDateAction.selected_date ?? "";
   const leavingAt = new Date(date + "T" + time + ":00");
 
+  // Cannot create train in the past
+  if (leavingAt < new Date()) {
+    await client.chat.postEphemeral({
+      channel,
+      user: creatorId,
+      text: ":tardis: The train was not created because you selected a time the past!",
+    });
+    return;
+  }
   // Announce train created
   const postMessageResult = await client.chat.postMessage({
     channel,
@@ -381,6 +394,139 @@ app.action("leaveTrain", async ({ ack, body, client, logger }) => {
   } catch (error) {
     logger.error(error, "Failed to delete joined message");
   }
+
+  return;
+});
+
+// List all trains by creator
+app.shortcut("delete_train", async ({ ack, body, client, logger }) => {
+  await ack();
+
+  const trains = await queryAllTrainsByCreator({ creatorId: body.user.id });
+  if (!trains) {
+    return logger.info(`No trains found for user id: ${body.user.id}`);
+  }
+
+  await client.views.open({
+    trigger_id: body.trigger_id,
+    view: {
+      type: "modal",
+      callback_id: "deleteTrainView",
+      title: {
+        type: "plain_text",
+        text: "Delete lunch train",
+      },
+      blocks: trains.map((train) => ({
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: `Destination: ${train.lunchDestination}, At: ${format(
+            new Date(train.leavingAt),
+            "dd/MM/yy hh:mm aa"
+          )}`,
+        },
+        accessory: {
+          type: "button",
+          text: {
+            type: "plain_text",
+            text: "Delete",
+            emoji: true,
+          },
+          style: "danger",
+          value: `${train.creatorId}.${train.trainId}`,
+          action_id: "deleteTrain",
+        },
+      })),
+    },
+  });
+  return;
+});
+
+app.action("deleteTrain", async ({ ack, body, client, logger }) => {
+  await ack();
+
+  const buttonValue = (body as BlockAction).actions[0] as ButtonAction;
+  const [creatorId, trainId] = buttonValue.value.split(".");
+
+  // Get scheduled message ids
+  let queryResult: LunchTrainRecord | undefined = undefined;
+  try {
+    queryResult = await queryDynamo({ creatorId, trainId });
+    if (!queryResult) {
+      return logger.error(
+        `Could not find trainId: ${trainId} created by user: ${creatorId}`
+      );
+    }
+
+    // Delete item
+    await deleteItemDynamo({ creatorId, trainId });
+  } catch (error) {
+    return logger.info(error, "Failed to delete item from dynamo");
+  }
+
+  // Only delete scheduled reminders in the past
+  if (new Date(queryResult.leavingAt) > new Date()) {
+    const creatorReminderScheduledMessagePayload = {
+      channel: creatorId,
+      scheduled_message_id: queryResult.creatorReminderScheduledMessageId,
+    };
+    const participantsReminderScheduledMessagePayloads =
+      queryResult.participants.map((participant) => ({
+        channel: participant.userId,
+        scheduled_message_id: participant.reminderScheduledMessageId,
+      }));
+
+    try {
+      await Promise.all(
+        [
+          creatorReminderScheduledMessagePayload,
+          ...participantsReminderScheduledMessagePayloads,
+        ].map((payload) => client.chat.deleteScheduledMessage(payload))
+      );
+    } catch (error) {
+      logger.info(error, "Failed to delete scheduled messages");
+    }
+  }
+
+  // Update train delete view modal
+  const trains = await queryAllTrainsByCreator({ creatorId: body.user.id });
+  if (!trains) {
+    return logger.info(`No trains found for user id: ${body.user.id}`);
+  }
+
+  await client.views.update({
+    response_action: "update",
+    view_id: (body as BlockAction).view?.id,
+    view: {
+      type: "modal",
+      callback_id: "deleteTrainView",
+      title: {
+        type: "plain_text",
+        text: "Delete lunch train",
+      },
+      blocks: trains.map((train) => ({
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: `Destination: ${train.lunchDestination}, At: ${format(
+            new Date(train.leavingAt),
+            "dd/MM/yy hh:mm aa"
+          )}`,
+        },
+        accessory: {
+          type: "button",
+          text: {
+            type: "plain_text",
+            text: "Delete",
+            emoji: true,
+          },
+          style: "danger",
+          value: `${train.creatorId}.${train.trainId}`,
+          action_id: "deleteTrain",
+        },
+      })),
+    },
+  });
 
   return;
 });
