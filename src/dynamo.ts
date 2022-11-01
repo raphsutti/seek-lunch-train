@@ -1,27 +1,31 @@
 import { DocumentClient } from "aws-sdk/clients/dynamodb";
 import { add, getUnixTime } from "date-fns";
 
+import { z } from "zod";
+
 const DYNAMO_TABLE = "seek-lunch-train";
 
-interface Participant {
-  userId: string;
-  reminderScheduledMessageId: string;
-  // For future roll call feature
-  readyToDepart: boolean;
-}
-export interface LunchTrain {
-  creatorId: string;
-  trainId: string;
-  lunchDestination: string;
-  meetLocation: string;
+const Participant = z.object({
+  userId: z.string(),
+  reminderScheduledMessageId: z.string(),
+  readyToDepart: z.boolean(),
+});
+
+export const LunchTrainZod = z.object({
+  creatorId: z.string(),
+  trainId: z.string(),
+  lunchDestination: z.string(),
+  meetLocation: z.string(),
 
   // UTC format
-  leavingAt: string;
-  participants: Participant[];
+  leavingAt: z.string(),
+  participants: z.array(Participant),
   // TimeStamp identifies the message for updating
-  trainCreatedPostTimeStamp: string;
-  creatorReminderScheduledMessageId: string;
-}
+  trainCreatedPostTimeStamp: z.string(),
+  creatorReminderScheduledMessageId: z.string(),
+});
+
+export type LunchTrain = z.infer<typeof LunchTrainZod>;
 
 export interface LunchTrainRecord extends LunchTrain {
   ttl: string;
@@ -29,7 +33,7 @@ export interface LunchTrainRecord extends LunchTrain {
 
 const client = new DocumentClient({ region: "ap-southeast-2" });
 
-export const putDynamoItem = (data: LunchTrain) => {
+export const putDynamoItem = async (data: LunchTrain) => {
   const oneWeekAfterTrainLeft = getUnixTime(
     add(new Date(data.leavingAt), { days: 2 })
   );
@@ -42,10 +46,12 @@ export const putDynamoItem = (data: LunchTrain) => {
     ReturnConsumedCapacity: "TOTAL",
   };
 
-  client.put(params, function (err, data) {
-    if (err) console.log(err);
-    else console.log(data);
-  });
+  await client
+    .put(params, function (err, data) {
+      if (err) console.log(err);
+      else console.log(data);
+    })
+    .promise();
 };
 
 export const queryDynamo = async (input: {

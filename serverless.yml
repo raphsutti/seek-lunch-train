@@ -5,6 +5,20 @@ useDotenv: true
 provider:
   name: aws
   runtime: nodejs12.x
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - dynamodb:Query
+            - dynamodb:PutItem
+            - dynamodb:DeleteItem
+          Resource: "arn:aws:dynamodb:ap-southeast-2:*:table/seek-lunch-train"
+        - Effect: Allow
+          Action:
+            - dynamodb:Query
+            - dynamodb:Scan
+          Resource: "arn:aws:dynamodb:ap-southeast-2:*:table/seek-lunch-train/index/*"
   environment:
     SLACK_SIGNING_SECRET: ${env:SLACK_SIGNING_SECRET}
     SLACK_BOT_TOKEN: ${env:SLACK_BOT_TOKEN}
@@ -12,10 +26,19 @@ provider:
 functions:
   slack:
     handler: src/app.handler
+    name: seek-lunch-train
     events:
       - http:
           path: /
           method: post
+  processor:
+    handler: src/processor.handler
+    events:
+      - sqs:
+          arn:
+            Fn::GetAtt:
+              - seekLunchTrainQueue
+              - Arn
 
 resources:
   Resources:
@@ -40,6 +63,9 @@ resources:
           Enabled: true
           AttributeName: ttl
 
+    seekLunchTrainQueue:
+      Type: "AWS::SQS::Queue"
+      # TODO investigate FIFO queue
 plugins:
   - serverless-esbuild
   - serverless-offline
