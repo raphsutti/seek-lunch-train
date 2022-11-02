@@ -8,7 +8,7 @@ import {
   queryAllTrainsByCreator,
   queryDynamo,
 } from "./dynamo";
-import { format, formatISO, getUnixTime, sub } from "date-fns";
+import { format, getUnixTime, sub } from "date-fns";
 import { v4 as uuidV4 } from "uuid";
 import {
   BlockAction,
@@ -180,10 +180,11 @@ app.view("newTrain", async ({ ack, body, client, logger }) => {
         type: "section",
         text: {
           type: "mrkdwn",
-          text: `<@${
+          text: `:train3: <@${
             body.user.id
-          }> has started a lunch train!\nDestination: ${lunchDestination}\nMeeting at: ${meetLocation}\nLeaving: ${format(
+          }> has started a lunch train!\nDestination: ${lunchDestination}\nMeeting at: ${meetLocation}\nLeaving: ${formatInTimeZone(
             leavingAt,
+            "Australia/Melbourne",
             "dd/MM/yy hh:mm aa"
           )}`,
         },
@@ -196,7 +197,7 @@ app.view("newTrain", async ({ ack, body, client, logger }) => {
             type: "button",
             text: {
               type: "plain_text",
-              text: "Count me in!",
+              text: "Count me in! (join train)",
               emoji: true,
             },
             style: "primary",
@@ -207,7 +208,7 @@ app.view("newTrain", async ({ ack, body, client, logger }) => {
             type: "button",
             text: {
               type: "plain_text",
-              text: "I'll pass",
+              text: "I'll pass (leave train)",
               emoji: true,
             },
             value: `${creatorId}.${trainId}`,
@@ -423,13 +424,12 @@ app.action("leaveTrain", async ({ ack, body, client, logger }) => {
 });
 
 // List all trains by creator
-// TODO switch to slash command /deletelunch
-app.shortcut("delete_train", async ({ ack, body, client, logger }) => {
+app.command("/deletetrain", async ({ ack, body, client, logger }) => {
   await ack();
 
-  const trains = await queryAllTrainsByCreator({ creatorId: body.user.id });
+  const trains = await queryAllTrainsByCreator({ creatorId: body.user_id });
   if (!trains) {
-    return logger.info(`No trains found for user id: ${body.user.id}`);
+    return logger.info(`No trains found for user id: ${body.user_id}`);
   }
 
   await client.views.open({
@@ -473,7 +473,6 @@ app.action("deleteTrain", async ({ ack, body, client, logger }) => {
   const buttonValue = (body as BlockAction).actions[0] as ButtonAction;
   const [creatorId, trainId] = buttonValue.value.split(".");
 
-  // Get scheduled message ids
   let queryResult: LunchTrainRecord | undefined = undefined;
   try {
     queryResult = await queryDynamo({ creatorId, trainId });
@@ -501,6 +500,7 @@ app.action("deleteTrain", async ({ ack, body, client, logger }) => {
         scheduled_message_id: participant.reminderScheduledMessageId,
       }));
 
+    // Delete scheduled messages
     try {
       await Promise.all(
         [
@@ -511,6 +511,16 @@ app.action("deleteTrain", async ({ ack, body, client, logger }) => {
     } catch (error) {
       logger.info(error, "Failed to delete scheduled messages");
     }
+
+    // // Delete original post
+    // try {
+    //   await client.chat.delete({
+    //     channel,
+    //     ts: queryResult.trainCreatedPostTimeStamp,
+    //   });
+    // } catch (error) {
+    //   logger.info(error, "Failed to delete original messages");
+    // }
   }
 
   // Update train delete view modal
