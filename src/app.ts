@@ -1,6 +1,6 @@
 import { App, AwsLambdaReceiver } from "@slack/bolt";
 import { AwsEvent } from "@slack/bolt/dist/receivers/AwsLambdaReceiver";
-import { formatInTimeZone } from "date-fns-tz";
+import { formatInTimeZone, zonedTimeToUtc } from "date-fns-tz";
 import {
   deleteItemDynamo,
   LunchTrainRecord,
@@ -157,7 +157,11 @@ app.view("newTrain", async ({ ack, body, client, logger }) => {
     body.view.state.values.meetTime.meetTimeAction.selected_time ?? "";
   const date =
     body.view.state.values.meetDate.meetDateAction.selected_date ?? "";
-  const leavingAt = new Date(date + "T" + time + ":00");
+
+  const leavingAt = zonedTimeToUtc(
+    new Date(date + "T" + time + ":00"),
+    "Australia/Sydney"
+  );
 
   // Cannot create train in the past
   if (leavingAt < new Date()) {
@@ -228,7 +232,7 @@ app.view("newTrain", async ({ ack, body, client, logger }) => {
       trainId,
       lunchDestination,
       meetLocation,
-      leavingAt: formatISO(leavingAt),
+      leavingAt: leavingAt.toISOString(),
       participants: [],
       trainCreatedPostTimeStamp: postMessageResult.message?.ts ?? "",
       creatorReminderScheduledMessageId: scheduled_message_id ?? "",
