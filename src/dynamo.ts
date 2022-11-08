@@ -7,6 +7,7 @@ const DYNAMO_TABLE = "seek-lunch-train";
 
 const Participant = z.object({
   userId: z.string(),
+  userJoinedMessageId: z.string(),
   reminderScheduledMessageId: z.string(),
   readyToDepart: z.boolean(),
 });

@@ -31,7 +31,7 @@ const app = new App({
 });
 
 // TODO - Change this to prod channel ID
-const channel = "lunch-train";
+const channel = "C0494FBB290";
 
 // TODO - use Lambda SQS event to process events
 
@@ -281,12 +281,19 @@ app.action("joinTrain", async ({ ack, body, client, logger }) => {
     logger.info(error, "Unable to create a scheduled message for participant");
   }
 
+  const userJoinMessageResponse = await client.chat.postMessage({
+    channel,
+    thread_ts: (body as BlockAction).message?.ts,
+    text: `<@${body.user.id}> joined the train!`,
+  });
+
   const updatedTrain: LunchTrainRecord = {
     ...queryResult,
     participants: [
       ...queryResult.participants,
       {
         userId: body.user.id,
+        userJoinedMessageId: userJoinMessageResponse.message?.ts ?? "",
         reminderScheduledMessageId:
           scheduledMessageResult?.scheduled_message_id ?? "",
         readyToDepart: false,
@@ -308,12 +315,6 @@ app.action("joinTrain", async ({ ack, body, client, logger }) => {
   } catch (error) {
     logger.error(error, "Failed to update lunch train participant via dynamo");
   }
-
-  await client.chat.postMessage({
-    channel,
-    thread_ts: (body as BlockAction).message?.ts,
-    text: `<@${body.user.id}> joined the train!`,
-  });
 
   return;
 });
@@ -382,39 +383,17 @@ app.action("leaveTrain", async ({ ack, body, client, logger }) => {
   }
 
   // Delete user joined message in thread
-  const thread = await client.conversations.replies({
-    channel: body.channel?.id ?? "",
-    ts: (body as BlockAction).message?.thread_ts,
-  });
-
-  const replies = thread.messages
-    ?.map((message) => {
-      return {
-        // @ts-ignore
-        user: message.blocks[0].elements?.[0].elements?.[0]?.user_id,
-        ts: message.ts,
-      };
-    })
-    // Filter out parent message
-    .filter((message) => message.user);
-
-  if (!replies) {
-    return logger.info("No replies found in thread");
-  }
-
-  // Find user joined message
-  const messageTsToBeDeleted = replies.find(
-    (reply) => reply.user === body.user.id
-  );
-
-  if (!messageTsToBeDeleted || !messageTsToBeDeleted.ts) {
-    return logger.info("No message found to be deleted");
-  }
-
   try {
+    const leavingParticipant = queryResult.participants.find(
+      (participant) => participant.userId === body.user.id
+    );
+
+    if (!leavingParticipant) {
+      return;
+    }
     await client.chat.delete({
       channel: body.channel?.id ?? "",
-      ts: messageTsToBeDeleted.ts,
+      ts: leavingParticipant.userJoinedMessageId,
     });
   } catch (error) {
     logger.error(error, "Failed to delete joined message");
@@ -512,15 +491,26 @@ app.action("deleteTrain", async ({ ack, body, client, logger }) => {
       logger.info(error, "Failed to delete scheduled messages");
     }
 
-    // // Delete original post
-    // try {
-    //   await client.chat.delete({
-    //     channel,
-    //     ts: queryResult.trainCreatedPostTimeStamp,
-    //   });
-    // } catch (error) {
-    //   logger.info(error, "Failed to delete original messages");
-    // }
+    // Delete all threaded user joined messages
+    try {
+      await Promise.all(
+        queryResult.participants.map((participant) =>
+          client.chat.delete({ channel, ts: participant.userJoinedMessageId })
+        )
+      );
+    } catch (error) {
+      logger.info(error, "Failed to delete user joined messages");
+    }
+
+    // Delete original post
+    try {
+      await client.chat.delete({
+        channel,
+        ts: queryResult.trainCreatedPostTimeStamp,
+      });
+    } catch (error) {
+      logger.info(error, "Failed to delete original messages");
+    }
   }
 
   // Update train delete view modal
