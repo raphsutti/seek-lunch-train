@@ -23,6 +23,7 @@ export const LunchTrainZod = z.object({
   participants: z.array(Participant),
   // TimeStamp identifies the message for updating
   trainCreatedPostTimeStamp: z.string(),
+  trainCreatedPostChannelId: z.string(),
   creatorReminderScheduledMessageId: z.string(),
 });
 

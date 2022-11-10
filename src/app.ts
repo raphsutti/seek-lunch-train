@@ -30,16 +30,13 @@ const app = new App({
   signingSecret: process.env.SLACK_SIGNING_SECRET,
 });
 
-// TODO - Change this to prod channel ID
-const channel = "C0494FBB290";
-
 // TODO - use Lambda SQS event to process events
-
-// TODO - update original created train message when train deleted or in the past
 
 // Create new lunch train
 app.command("/lunch", async ({ ack, body, client, logger }) => {
   await ack();
+
+  const initiatedChannelId = body.channel_id;
 
   const today = formatInTimeZone(
     new Date(),
@@ -122,6 +119,20 @@ app.command("/lunch", async ({ ack, body, client, logger }) => {
               emoji: true,
             },
           },
+          {
+            type: "input",
+            block_id: "channelToBePosted",
+            element: {
+              type: "channels_select",
+              action_id: "channelToBePostedAction",
+              initial_channel: initiatedChannelId,
+            },
+            label: {
+              type: "plain_text",
+              text: "Pick a public channel (Seek Lunch Train app must be added there first)",
+              emoji: true,
+            },
+          },
         ],
         submit: {
           type: "plain_text",
@@ -143,6 +154,10 @@ app.action("meetTimeAction", async ({ ack }) => {
   return await ack();
 });
 
+app.action("channelToBePostedAction", async ({ ack }) => {
+  return await ack();
+});
+
 // Create new train
 app.view("newTrain", async ({ ack, body, client, logger }) => {
   await ack();
@@ -157,6 +172,9 @@ app.view("newTrain", async ({ ack, body, client, logger }) => {
     body.view.state.values.meetTime.meetTimeAction.selected_time ?? "";
   const date =
     body.view.state.values.meetDate.meetDateAction.selected_date ?? "";
+  const channelToBePosted =
+    body.view.state.values.channelToBePosted.channelToBePostedAction
+      .selected_channel ?? "";
 
   const leavingAt = zonedTimeToUtc(
     new Date(date + "T" + time + ":00"),
@@ -166,7 +184,7 @@ app.view("newTrain", async ({ ack, body, client, logger }) => {
   // Cannot create train in the past
   if (leavingAt < new Date()) {
     await client.chat.postEphemeral({
-      channel,
+      channel: channelToBePosted,
       user: creatorId,
       text: ":tardis: The train was not created because you selected a time the past!",
     });
@@ -174,7 +192,7 @@ app.view("newTrain", async ({ ack, body, client, logger }) => {
   }
   // Announce train created
   const postMessageResult = await client.chat.postMessage({
-    channel,
+    channel: channelToBePosted,
     blocks: [
       {
         type: "section",
@@ -236,6 +254,7 @@ app.view("newTrain", async ({ ack, body, client, logger }) => {
       leavingAt: leavingAt.toISOString(),
       participants: [],
       trainCreatedPostTimeStamp: postMessageResult.message?.ts ?? "",
+      trainCreatedPostChannelId: channelToBePosted,
       creatorReminderScheduledMessageId: scheduled_message_id ?? "",
     });
   } catch (error) {
@@ -282,7 +301,7 @@ app.action("joinTrain", async ({ ack, body, client, logger }) => {
   }
 
   const userJoinMessageResponse = await client.chat.postMessage({
-    channel,
+    channel: queryResult.trainCreatedPostChannelId,
     thread_ts: (body as BlockAction).message?.ts,
     text: `<@${body.user.id}> joined the train!`,
   });
@@ -392,7 +411,7 @@ app.action("leaveTrain", async ({ ack, body, client, logger }) => {
       return;
     }
     await client.chat.delete({
-      channel: body.channel?.id ?? "",
+      channel: queryResult.trainCreatedPostChannelId,
       ts: leavingParticipant.userJoinedMessageId,
     });
   } catch (error) {
@@ -495,7 +514,10 @@ app.action("deleteTrain", async ({ ack, body, client, logger }) => {
     try {
       await Promise.all(
         queryResult.participants.map((participant) =>
-          client.chat.delete({ channel, ts: participant.userJoinedMessageId })
+          client.chat.delete({
+            channel: queryResult?.trainCreatedPostChannelId ?? "",
+            ts: participant.userJoinedMessageId,
+          })
         )
       );
     } catch (error) {
@@ -505,7 +527,7 @@ app.action("deleteTrain", async ({ ack, body, client, logger }) => {
     // Delete original post
     try {
       await client.chat.delete({
-        channel,
+        channel: queryResult.trainCreatedPostChannelId,
         ts: queryResult.trainCreatedPostTimeStamp,
       });
     } catch (error) {
