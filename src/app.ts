@@ -281,9 +281,13 @@ app.action("joinTrain", async ({ ack, body, client, logger }) => {
   const hasUserJoined = queryResult.participants.some(
     (participant) => participant.userId === body.user.id
   );
-  // Could early return here but leaving it for retry
   if (hasUserJoined) {
-    logger.info(`User ${body.user.id} has already joined the train`);
+    await client.chat.postEphemeral({
+      channel: queryResult.trainCreatedPostChannelId,
+      user: body.user.id,
+      text: `You have already joined the train to ${queryResult.lunchDestination}`,
+    });
+    return logger.info(`User ${body.user.id} has already joined the train`);
   }
 
   let scheduledMessageResult;
